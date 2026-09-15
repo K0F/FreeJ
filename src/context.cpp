@@ -215,8 +215,7 @@ bool Context::init() {
 #endif
 
 #ifdef WITH_FFMPEG
-  /** init ffmpeg libraries: register all codecs, demux and protocols */
-  av_register_all();
+  /** init ffmpeg libraries (registration is automatic in modern ffmpeg) */
   /** make ffmpeg silent */
   av_log_set_level(AV_LOG_QUIET);
   //av_log_set_level(AV_LOG_DEBUG);

@@ -12,9 +12,9 @@
 
 // Linear transparent blits
 BLIT blit_xor(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint32_t *s = (uint32_t*)src;
-  register uint32_t *d = (uint32_t*)dst;
+  int c;
+  uint32_t *s = (uint32_t*)src;
+  uint32_t *d = (uint32_t*)dst;
 
   for(c=bytes>>2;c>0;c--,s++,d++)
     *d ^= *s;
@@ -26,33 +26,33 @@ BLIT rgb_jmemcpy(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
 }
 
 BLIT red_channel(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint8_t *s = (uint8_t*)src;
-  register uint8_t *d = (uint8_t*)dst;
+  int c;
+  uint8_t *s = (uint8_t*)src;
+  uint8_t *d = (uint8_t*)dst;
   for(c=bytes>>2;c>0;c--,s+=4,d+=4)
     *(d+rchan) = *(s+rchan);
 }
 
 BLIT green_channel(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint8_t *s = (uint8_t*)src;
-  register uint8_t *d = (uint8_t*)dst;
+  int c;
+  uint8_t *s = (uint8_t*)src;
+  uint8_t *d = (uint8_t*)dst;
   for(c=bytes>>2;c>0;c--,s+=4,d+=4)
     *(d+gchan) = *(s+gchan);
 }
 
 BLIT blue_channel(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint8_t *s = (uint8_t*)src;
-  register uint8_t *d = (uint8_t*)dst;
+  int c;
+  uint8_t *s = (uint8_t*)src;
+  uint8_t *d = (uint8_t*)dst;
   for(c=bytes>>2;c>0;c--,s+=4,d+=4)
     *(d+bchan) = *(s+bchan);
 }
 
 BLIT red_mask(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint32_t *s = (uint32_t*)src;
-  register uint32_t *d = (uint32_t*)dst;
+  int c;
+  uint32_t *s = (uint32_t*)src;
+  uint32_t *d = (uint32_t*)dst;
 
   for(c=bytes>>2;c>0;c--,s++,d++)
     *d |= *s & red_bitmask;
@@ -64,9 +64,9 @@ BLIT red_mask(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
 }
 
 BLIT green_mask(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint32_t *s = (uint32_t*)src;
-  register uint32_t *d = (uint32_t*)dst;
+  int c;
+  uint32_t *s = (uint32_t*)src;
+  uint32_t *d = (uint32_t*)dst;
 
   for(c=bytes>>2;c>0;c--,s++,d++)
     *d |= *s & green_bitmask;
@@ -78,9 +78,9 @@ BLIT green_mask(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
 }
 
 BLIT blue_mask(void *src, void *dst, int bytes, Linklist<Parameter> *params) {
-  register int c;
-  register uint32_t *s = (uint32_t*)src;
-  register uint32_t *d = (uint32_t*)dst;
+  int c;
+  uint32_t *s = (uint32_t*)src;
+  uint32_t *d = (uint32_t*)dst;
 
   for(c=bytes>>2;c>0;c--,s++,d++)
     *d |= *s & blue_bitmask;

@@ -145,7 +145,7 @@
 /* for small memory blocks (<256 bytes) this version is faster */
 #define small_memcpy(to,from,n)\
 {\
-register unsigned long int dummy;\
+unsigned long int dummy;\
 __asm__ __volatile__(\
   "rep; movsb"\
   :"=&D"(to), "=&S"(from), "=&c"(dummy)\
@@ -189,7 +189,7 @@ static void * agp_memcpy(void *to, const void *from , size_t len) {
 	retval = to;
        if(len >= MIN_LEN)
 	{
-	  register unsigned long int delta;
+	  unsigned long int delta;
           /* Align destinition to MMREG_SIZE -boundary */
           delta = ((unsigned long int)to)&7;
           if(delta)
@@ -288,7 +288,7 @@ static void * mmx_memcpy(void * to, const void * from, size_t len)
      retval = to;
 
      if (len >= MMX1_MIN_LEN) {
-          register unsigned long int delta;
+          unsigned long int delta;
           /* Align destinition to MMREG_SIZE -boundary */
           delta = ((unsigned long int)to)&(MMX_MMREG_SIZE-1);
           if (delta) {
@@ -374,7 +374,7 @@ static void * mmx2_memcpy(void * to, const void * from, size_t len)
                           : : "r" (from) );
 
      if (len >= MIN_LEN) {
-          register unsigned long int delta;
+          unsigned long int delta;
           /* Align destinition to MMREG_SIZE -boundary */
           delta = ((unsigned long int)to)&(MMX_MMREG_SIZE-1);
           if (delta) {
@@ -438,7 +438,7 @@ static void * sse_memcpy(void * to, const void * from, size_t len)
                           : : "r" (from) );
 
      if (len >= MIN_LEN) {
-          register unsigned long int delta;
+          unsigned long int delta;
           /* Align destinition to MMREG_SIZE -boundary */
           delta = ((unsigned long int)to)&(SSE_MMREG_SIZE-1);
           if (delta) {
@@ -524,7 +524,7 @@ static void * sse2_memcpy(void * to, const void * from, size_t len)
                           : : "r" (from) );
 
      if (len >= MIN_LEN) {
-          register unsigned long int delta;
+          unsigned long int delta;
           /* Align destinition to MMREG_SIZE -boundary */
           delta = ((unsigned long int)to)&(SSE_MMREG_SIZE-1);
           if (delta) {

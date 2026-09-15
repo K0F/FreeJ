@@ -22,7 +22,6 @@
 #include <config.h>
 #include <inttypes.h>
 
-// #define UINT64_C uint64_t
 extern "C" {
 #ifdef HAVE_LIBAVCODEC_AVCODEC_H
 #   include <libavcodec/avcodec.h>
@@ -49,17 +48,22 @@ extern "C" {
 #   include <swscale.h>
 #endif
 #endif
+
+#   include <libavutil/imgutils.h>
+#   include <libavutil/opt.h>
 }
 #include <layer.h>
 #define INBUF_SIZE 4096
 #define NO_MARK -1
 #define FIFO_SIZE 2
 
+#ifndef AVCODEC_MAX_AUDIO_FRAME_SIZE
+#define AVCODEC_MAX_AUDIO_FRAME_SIZE 192000
+#endif
+
 #include <callback.h>
 
 #include <factory.h>
-
-//void av_log_null_callback(void* ptr, int level, const char* fmt, va_list vl);
 
 class VideoLayer: public Layer {
 
@@ -84,7 +88,7 @@ class VideoLayer: public Layer {
 	bool add_eos_call(DumbCall *c) { return eos->add_call(c); }
 	bool rem_eos_call(DumbCall *c) { return eos->rem_call(c); }
 
-	bool use_audio; ///< set true if audio should be decoded and fed to the scren->audio FIFO pipe
+	bool use_audio;
 
 	int audio_channels;
 	int audio_samplerate;
@@ -93,14 +97,11 @@ class VideoLayer: public Layer {
 	bool _init();
 
     private:
-    /**
-	 * av(codec|format) aka ffmpeg related variables
-	 */
 	AVCodec *avcodec;
-	AVInputFormat *fmt;
+	const AVInputFormat *fmt;
 	AVFormatContext *avformat_context;
 	AVStream *avformat_stream;
-	AVPicture *rgba_picture;
+	AVFrame *rgba_frame;
 	AVPacket pkt;
 
 
@@ -109,10 +110,11 @@ class VideoLayer: public Layer {
 
 	AVCodecContext *audio_codec_ctx;
 	AVCodec *audio_codec;
-	uint8_t *audio_buf; // buffer used by decode_audio_packet
+	uint8_t *audio_buf;
 	double audio_size;
 
-	AVFrame av_frame;
+	AVFrame *av_frame;
+	AVFrame *audio_frame;
 #ifdef WITH_SWSCALE
 	struct SwsContext *img_convert_ctx;
 #endif
@@ -132,18 +134,14 @@ class VideoLayer: public Layer {
 	float *audio_resampled_buf;
 	unsigned long audio_resampled_buf_len;
 
-	/**
-	 * Number of decoded frames. As for now together with picture_number
-	 * it's broken when seeking TODO!
-	 */
 	int frame_number;
 	int picture_number;
 
 	/**
 	 * application variables
 	 */
-	struct frame_fifo_t { // I want it hard, I want it raw
-		AVPicture *picture[FIFO_SIZE];
+	struct frame_fifo_t {
+		AVFrame *frames[FIFO_SIZE];
 		int picture_type[FIFO_SIZE];
 		int length;
 	} frame_fifo;
@@ -155,37 +153,31 @@ class VideoLayer: public Layer {
 	bool grab_dv;
 	double mark_in;
 	double mark_out;
-	/** dropping frames variables */
-	int user_play_speed; /** play speed to be visualized to the user */
-	float play_speed; /** real speed */
+	int user_play_speed;
+	float play_speed;
 	int play_speed_control;
 
 
 	char *full_filename;
 
-	int video_index;	//contains the stream place number
-	int audio_index;	//contains the stream place number
+	int video_index;
+	int audio_index;
 
 	FILE *fp;
 
 	/** private methods */
 	int seek(int64_t timestamp);
-	int decode_video_packet( int *got_picture);
-	int decode_audio_packet( int *data_size);
-	int decode_audio_packet();
 
 	void set_speed(int speed);
 	double get_master_clock();
-	void deinterlace(AVPicture *picture);
+	void deinterlace(AVFrame *frame);
 	int new_fifo();
 	void free_fifo();
-	int new_picture(AVPicture *p);
-	void free_picture(AVPicture *p);
+	int new_frame(AVFrame **frame);
+	void free_frame(AVFrame **frame);
 
-	// quick hack for EOS callback
 	DumbCallback *eos;
 
-    // allow to use Factory on this class
     FACTORY_ALLOWED
 };
 

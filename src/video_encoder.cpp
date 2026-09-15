@@ -37,9 +37,9 @@
 inline void ccvt_yuyv_420p(int width, int height,
 			   const void *src, void *dsty,
 			   void *dstu, void *dstv) {
-  register int n, l, j;
-  register unsigned char *dy, *du, *dv;
-  register unsigned char *s1, *s2;
+  int n, l, j;
+  unsigned char *dy, *du, *dv;
+  unsigned char *s1, *s2;
   
   dy = (unsigned char *)dsty;
   du = (unsigned char *)dstu;

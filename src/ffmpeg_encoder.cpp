@@ -33,7 +33,7 @@
 #include <sdl_screen.h>
 
 FFmpegEncoder::FFmpegEncoder() 
-  :VideoEncoder() {
+  :VideoEncoder(), encoder_ctx(NULL), sws_ctx(NULL) {
 
   func("FFmpegEncoder object created");
 
@@ -43,131 +43,135 @@ FFmpegEncoder::FFmpegEncoder()
 FFmpegEncoder::~FFmpegEncoder() {
 	func("FFmpegEncoder:::~FFmpegEncoder");
 
-	if(codec) avcodec_close(codec);
+	avcodec_free_context(&encoder_ctx);
 
 	free_av_objects();
 
 	// finish writing the file
 	av_write_trailer(afc);
 
-	// free the streams
-	for(int i = 0; i < afc->nb_streams; i++) {
-	  free(&afc->streams[i]);
+	if (!(afc->oformat->flags & AVFMT_NOFILE)) {
+		/* close the output file */
+		avio_closep(&afc->pb);
 	}
-	
-	if (!(aof->flags & AVFMT_NOFILE)) {
-	  /* close the output file */
-	  url_fclose(&afc->pb);
-	}
-	/* free the stream */
-	free(afc);
+	/* free the format context */
+	avformat_free_context(afc);
+	afc = NULL;
 }
 
 void FFmpegEncoder::free_av_objects() {
-  free(picture);
-  free(tmp_picture);
-  free(video_outbuf);
+  if(picture) av_frame_free(&picture);
+  if(tmp_picture) { av_free(tmp_picture); tmp_picture = NULL; }
+  if(video_outbuf) { av_free(video_outbuf); video_outbuf = NULL; }
 }
 
 bool FFmpegEncoder::init(Context *_env) { 
   if(this->is_running()) return true;
   if(!_init(_env)) return false;
-  // initialize libavcodec, and register all codecs and formats
-  av_register_all();
   
-  aof = guess_format(NULL,filename,NULL);
+  const AVOutputFormat *aof = av_guess_format(NULL,filename,NULL);
   if(!aof) {
     error("Encoder::init::Can't find a correct format for %s. I will use avi",filename);
-    aof=guess_format("avi",NULL,NULL);
+    aof=av_guess_format("avi",NULL,NULL);
   }
   
   // create format context
-  afc = av_alloc_format_context();
+  afc = avformat_alloc_context();
   if(!afc) {
     error("FFmpegEncoder::init::Error allocating AVFormatContext!");
     return false;
   }
   afc->oformat=aof;
-  if(sizeof(filename)>MAX_FILE_LENGHT) {
-    error("FFmpegEncoder::init::Filename longer than %d!",MAX_FILE_LENGHT);
-    return false;
-  }
-  // copy filename inside the struct afc
-  snprintf(afc->filename, sizeof(afc->filename), "%s", filename);
+  snprintf(afc->url, sizeof(afc->url), "%s", filename);
   
-  // create stream and set parameter
-  if (aof->video_codec != CODEC_ID_NONE) {
-    video_stream = av_new_stream(afc,0);
-    if(!video_stream) {
-      error("FFmpegEncoder::init::Error allocating AVFormatContext!");
-      return false;
-    }
-    set_encoding_parameter();
-  }
-  // set the output parameters in avcodec
-  if (av_set_parameters(afc, NULL) < 0) {
-    error("FFmpegEncoder::init::Invalid output format parameters\n");
-    exit(1);
-  }
-  // DEBUG stuff
-  dump_format(afc, 0, filename, 1);
-  
-  // find the video encoder
-  AVCodecContext *acc=&video_stream->codec;
-  AVCodec *codec = avcodec_find_encoder(acc->codec_id);
-  if(!codec) {
+  // find the video encoder first to set codec id
+  enum AVCodecID codec_id = aof->video_codec;
+  if (codec_id == AV_CODEC_ID_NONE)
+    codec_id = AV_CODEC_ID_MPEG2VIDEO;
+
+  const AVCodec *encoder = avcodec_find_encoder(codec_id);
+  if(!encoder) {
     error("FFmpegEncoder:init::Couldn't find encoder");
     return false;
   }
+
+  // create stream and set parameter
+  video_stream = avformat_new_stream(afc, encoder);
+  if(!video_stream) {
+    error("FFmpegEncoder::init::Error allocating stream!");
+    return false;
+  }
+
+  // allocate and configure encoder context
+  encoder_ctx = avcodec_alloc_context3(encoder);
+  if(!encoder_ctx) {
+    error("FFmpegEncoder::init::Error allocating encoder context!");
+    return false;
+  }
+
+  set_encoding_parameter();
   
-  /* open the codec */
-  if (avcodec_open(acc, codec) < 0) {
+  if (avcodec_open2(encoder_ctx, encoder, NULL) < 0) {
     error("FFmpegEncoder:init::Couldn't open codec");
     return false;
   }
-  video_outbuf = NULL;
-  if (!(afc->oformat->flags & AVFMT_RAWPICTURE)) {
-    /* allocate output buffer */
-    /* XXX: API change will be done */
-    video_outbuf_size = 200000;
-    video_outbuf = (uint8_t *)av_malloc(video_outbuf_size);
-    if(!video_outbuf)
-      return false;
+
+  if (avcodec_parameters_from_context(video_stream->codecpar, encoder_ctx) < 0) {
+    error("FFmpegEncoder:init::Couldn't copy codec parameters to stream");
+    return false;
   }
-  
+
+  video_outbuf = NULL;
+  if (!(afc->oformat->flags & AVFMT_NOFILE)) {
+    if (avio_open(&afc->pb, filename, AVIO_FLAG_WRITE) < 0) {
+      fprintf(stderr, "Could not open '%s'\n", filename);
+      return false;
+    }
+  }
+
+  /* write the stream header */
+  if (avformat_write_header(afc, NULL) < 0) {
+    error("FFmpegEncoder::init::Error writing header");
+    return false;
+  }
+
+  // DEBUG stuff
+  av_dump_format(afc, 0, filename, 1);
+
   /* allocate the encoded raw picture */
-  picture = avcodec_alloc_frame();
-  //picture = (AVPicture *)malloc(sizeof(AVPicture));
-  
+  picture = av_frame_alloc();
   if (!picture) {
     error("Could not allocate picture\n");
     return false;
   }
-  int size = avpicture_get_size(acc->pix_fmt, acc->width, acc->height);
-  uint8_t *video_outbuf_tmp=(uint8_t *)av_malloc(size);
-  if (!video_outbuf_tmp) {
-    av_free(picture);
+  picture->format = encoder_ctx->pix_fmt;
+  picture->width  = encoder_ctx->width;
+  picture->height = encoder_ctx->height;
+  
+  if (av_frame_get_buffer(picture, 32) < 0) {
+    error("Could not allocate picture buffer\n");
     return false;
   }
-  avpicture_fill((AVPicture *)picture, video_outbuf_tmp, acc->pix_fmt, acc->width, acc->height);
-  
+
   /* if the output format is not YUV420P, then a temporary YUV420P
-     picture is needed too. It is then converted to the required
-     output format */
+     picture is needed too */
   tmp_picture = NULL;
-  if (acc->pix_fmt != PIX_FMT_YUV420P) {
-    AVFrame *picture_tmp = avcodec_alloc_frame();
-    if (!picture_tmp) {
-      fprintf(stderr, "Could not allocate temporary picture\n");
-      exit(1);
-    }
-    tmp_picture=(uint8_t *)av_malloc(size);
-    if (!tmp_picture) {
-      av_free(picture_tmp);
+  if (encoder_ctx->pix_fmt != AV_PIX_FMT_YUV420P) {
+    sws_ctx = sws_getContext(encoder_ctx->width, encoder_ctx->height, AV_PIX_FMT_RGB32,
+			     encoder_ctx->width, encoder_ctx->height,
+			     AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+    if (!sws_ctx) {
+      error("Could not allocate sws context");
       return false;
     }
-    avpicture_fill((AVPicture *)picture_tmp, tmp_picture, PIX_FMT_YUV420P, acc->width, acc->height);
+    video_outbuf_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P,
+						 encoder_ctx->width, encoder_ctx->height, 1);
+    tmp_picture = (uint8_t *)av_malloc(video_outbuf_size);
+    if (!tmp_picture) {
+      return false;
+    }
   }
+
   open();
 
   initialized = true;
@@ -178,128 +182,105 @@ bool FFmpegEncoder::write_frame() {
 	env->screen->lock();
 
 	func("FFmpegEncoder():write_frame()");
-	AVFrame *picture_ptr;
 	int ret=0;
-	int packet_size;
-	//	double video_pts;
 
-	codec=&video_stream->codec;
+	SdlScreen *sdl_screen = (SdlScreen *)env->screen;
 
-	// TODO changed ffmpeg api :|
-	//    video_pts = (double)video_stream->pts.val * video_stream->time_base.num / video_stream->time_base.den;
+	if (sws_ctx) {
+		/* convert RGB32 screen to YUV420P */
+		uint8_t *src_data[4] = {(uint8_t *)sdl_screen->screen->pixels, NULL, NULL, NULL};
+		int src_linesize[4] = {sdl_screen->w * 4, 0, 0, 0};
+		uint8_t *dst_data[4] = {NULL};
+		int dst_linesize[4] = {0};
 
-	picture_ptr = avcodec_alloc_frame();
-	prepare_image(picture_ptr);
+		av_image_fill_arrays(dst_data, dst_linesize, tmp_picture,
+				     AV_PIX_FMT_YUV420P,
+				     encoder_ctx->width, encoder_ctx->height, 1);
 
-	int size=-1;
-	if(STREAM_IS_RAW(afc)) {
-		packet_size=sizeof(AVPicture);
+		sws_scale(sws_ctx, src_data, src_linesize, 0, encoder_ctx->height,
+			  dst_data, dst_linesize);
+
+		av_frame_unref(picture);
+		av_image_fill_arrays(picture->data, picture->linesize, tmp_picture,
+				     AV_PIX_FMT_YUV420P,
+				     encoder_ctx->width, encoder_ctx->height, 1);
+	} else {
+		/* direct YUV420P input: fill picture from screen surface */
+		/* NOTE: this path assumes the screen surface is already YUV420P */
+		av_frame_unref(picture);
+		picture->data[0] = (uint8_t *)sdl_screen->screen->pixels;
+		picture->linesize[0] = sdl_screen->w;
 	}
-	else {
-		size = avcodec_encode_video(codec, video_outbuf, video_outbuf_size, picture);
-		picture_ptr=(AVFrame *)video_outbuf;
-		packet_size=size;
+
+	picture->pts = frame_count++;
+
+	AVPacket *av_packet = av_packet_alloc();
+	if (!av_packet) {
+		error("FFmpegEncoder :: Error allocating packet");
+		env->screen->unlock();
+		return false;
 	}
 
-	/* if zero size, it means the image was buffered */
-	if(size!=0) {
-		AVPacket av_packet;
-		av_init_packet(&av_packet);
-
-		// packet parameters
-		av_packet.pts= codec->coded_frame->pts;
-		if(size==-1 || IS_KEYFRAME(codec))
-			av_packet.flags |= PKT_FLAG_KEY;
-		av_packet.stream_index= video_stream->index;
-		av_packet.data= (uint8_t *)picture_ptr;
-		av_packet.size= packet_size;
-
-		// write to HARD disk
-		ret = av_write_frame(afc, &av_packet);
+	ret = avcodec_send_frame(encoder_ctx, picture);
+	if (ret < 0) {
+		error("FFmpegEncoder :: Error sending frame for encoding");
+		av_packet_free(&av_packet);
+		env->screen->unlock();
+		return false;
 	}
+
+	ret = avcodec_receive_packet(encoder_ctx, av_packet);
+	if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+		av_packet_free(&av_packet);
+		env->screen->unlock();
+		return true;
+	}
+	if (ret < 0) {
+		error("FFmpegEncoder :: Error encoding frame");
+		av_packet_free(&av_packet);
+		env->screen->unlock();
+		return false;
+	}
+
+	// write to disk
+	ret = av_write_frame(afc, av_packet);
+	av_packet_free(&av_packet);
 
 	if(ret != 0) {
 		error("FFmpegEncoder :: Error while writing frame number %d",frame_count);
+		env->screen->unlock();
 		return false;
 	}
-	frame_count++;
 	env->screen->unlock();
 	return true;
 }
-AVFrame *FFmpegEncoder::prepare_image(AVFrame *picture_ptr) {
-	SdlScreen *sdl_screen;
-	//    if(frame_count>STREAM_NB_FRAMES) {
-	//	picture_ptr=NULL;
-	//    }
-	//    else {
-	//	if(!STREAM_IS_YUV420P(codec))
-	//	    convert_to_YUV420P();
-	//	else
-	//	    create_dummy_image(picture,codec);
-	sdl_screen = (SdlScreen *)env->screen;
-	//	picture_ptr->data[0] =(uint8_t *)sdl_screen->get_surface();
-	picture_ptr->data[0] =(uint8_t *)sdl_screen->screen->pixels;
-	picture_ptr->data[1] = NULL;
-	picture_ptr->data[2] = NULL;
-	picture_ptr->linesize[0] = sdl_screen->w * 4;
 
-	//    }
-	//        avpicture_fill( (AVPicture *)picture, (uint8_t *)picture_ptr, PIX_FMT_YUV420P, codec->width, codec->width );
-	img_convert((AVPicture *)picture,PIX_FMT_YUV420P,(AVPicture *)picture_ptr,PIX_FMT_RGBA32,
-			sdl_screen->w,
-			sdl_screen->h);
-	return picture_ptr;
-}
 void FFmpegEncoder::open() { 
-	/* open the output file, if needed */
-	if (!(aof->flags & AVFMT_NOFILE)) {
-		if (url_fopen(&afc->pb, filename, URL_WRONLY) < 0) {
-			fprintf(stderr, "Could not open '%s'\n", filename);
-			exit(1);
-		}
-	}
-	/* write the stream header, if any */
-	av_write_header(afc);
+	/* nothing to do here now, header is already written */
 }
 
 
-void FFmpegEncoder::convert_to_YUV420P() { 
-	//    create_dummy_image(tmp_picture,codec);
-	img_convert((AVPicture *)picture, codec->pix_fmt, (AVPicture *)tmp_picture, PIX_FMT_YUV420P,
-			codec->width,
-			codec->height);
-}
 void FFmpegEncoder::set_encoding_parameter() { 
-	AVCodecContext *acc=&video_stream->codec;
 
 	/** Set video codec from the format context */
-//	acc->codec_id=aof->video_codec;
+	encoder_ctx->codec_id = AV_CODEC_ID_MPEG2VIDEO;
 
-	acc->codec_id=CODEC_ID_MPEG2VIDEO;
-
-	acc->codec_type = AVMEDIA_TYPE_VIDEO;
+	encoder_ctx->codec_type = AVMEDIA_TYPE_VIDEO;
 
 	/* sample parameters */
-	acc->bit_rate = 2000000;
+	encoder_ctx->bit_rate = 2000000;
 
 	/* set resolution accordingly to the global Viewport*/
-	acc->width = env->screen->w;
-	acc->height = env->screen->h;
+	encoder_ctx->width = env->screen->w;
+	encoder_ctx->height = env->screen->h;
 
-	/* frames per second */
-//	acc->frame_rate = env->fps_speed;  
-//	acc->frame_rate_base = 1;
+	encoder_ctx->gop_size = 12;
 
-	acc->gop_size = 12; /* emit one intra frame every twelve frames at most */
-
-	if (acc->codec_id == CODEC_ID_MPEG1VIDEO){
-		/* needed to avoid using macroblocks in which some coeffs overflow 
-		   this doesnt happen with normal video, it just happens here as the 
-		   motion of the chroma plane doesnt match the luma plane */
-		acc->mb_decision=2;
+	if (encoder_ctx->codec_id == AV_CODEC_ID_MPEG1VIDEO){
+		encoder_ctx->mb_decision=2;
 	}
-	// some formats want stream headers to be seperate
+	// some formats want stream headers to be separate
 	if(!strcmp(afc->oformat->name, "mp4") || !strcmp(afc->oformat->name, "mov") || !strcmp(afc->oformat->name, "3gp"))
-		acc->flags |= CODEC_FLAG_GLOBAL_HEADER;
+		encoder_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 }
 #endif

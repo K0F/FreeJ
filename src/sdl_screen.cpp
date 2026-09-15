@@ -111,7 +111,7 @@ void SdlScreen::setup_blits(Layer *lay) {
 }
 
 void SdlScreen::blit(Layer *src) {
-  register int16_t c;
+  int16_t c;
   void *offset;
   Blit *b;
 

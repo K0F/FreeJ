@@ -654,8 +654,8 @@ if test x$have_mozjs = xno || test x$static_mozjs = xyes; then
   AC_CONFIG_COMMANDS([lib/javascript/.xulrunner-subdir],
                      [
     (cd lib/javascript &&
-      CXXFLAGS="$GLOBAL_CFLAGS $CXXFLAGS -fPIC" \
-      CFLAGS="$GLOBAL_CFLAGS $CFLAGS -fPIC" \
+      CXXFLAGS="-std=gnu++98 $GLOBAL_CFLAGS $CXXFLAGS -fPIC" \
+      CFLAGS="-std=gnu89 $GLOBAL_CFLAGS $CFLAGS -fPIC" \
       $ac_srcdir/configure --enable-static \
         --enable-js-static-build --disable-jit) || exit $?
   ])

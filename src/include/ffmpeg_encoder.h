@@ -2,7 +2,6 @@
 #ifndef __ffmpeg_encoder_h__
 #define __ffmpeg_encoder_h__
 
-
 #include <config.h>
 #include <linklist.h>
 #include <video_encoder.h>
@@ -25,14 +24,15 @@
 #   include <avformat.h>
 #endif
 
-#define STREAM_IS_RAW(avformat_context) \
-    (avformat_context->oformat->flags & AVFMT_RAWPICTURE)
+#   include <libavutil/imgutils.h>
+#   include <libavutil/opt.h>
+
+// STREAM_IS_RAW: AVFMT_RAWPICTURE removed in modern ffmpeg
+// treat as always false (buffered output path)
+#define STREAM_IS_RAW(avformat_context) (0)
 
 #define STREAM_IS_YUV420P(codec) \
-    (codec->pix_fmt != PIX_FMT_YUV420P)
-
-#define IS_KEYFRAME(codec) \
-    (codec->coded_frame->key_frame)
+    ((codec)->pix_fmt != AV_PIX_FMT_YUV420P)
 
 //XXX
 #define STREAM_NB_FRAMES 125 
@@ -57,16 +57,14 @@ class FFmpegEncoder: public VideoEncoder {
   AVStream *video_stream;
   AVFormatContext *afc;
   AVFrame *picture;
-  AVOutputFormat *aof;
-  AVCodecContext *codec;
+  AVCodecContext *encoder_ctx;
   
   uint8_t *video_outbuf, *tmp_picture;
   int frame_count, video_outbuf_size;
-  
+  struct SwsContext *sws_ctx;
+
   void free_av_objects();
   void open();
-  void convert_to_YUV420P();
-  AVFrame *prepare_image(AVFrame *picture_ptr);
 
 };
 

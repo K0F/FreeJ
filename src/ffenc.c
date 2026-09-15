@@ -23,7 +23,21 @@ AVCodecContext    *outCodecCtx;
 
 int        movie_width;
 int        movie_height;
-int        render_fmt = PIX_FMT_YUV420P; // PIX_FMT_ARGB;
+int        render_fmt = AV_PIX_FMT_YUV420P; // PIX_FMT_ARGB;
+
+static int flush_encoder(void) {
+  int out_size = 0;
+  AVPacket pkt;
+  int got = 0;
+
+  avcodec_send_frame(outCodecCtx, NULL);
+  while (avcodec_receive_packet(outCodecCtx, &pkt) == 0) {
+    got = 1;
+    fwrite(pkt.data, 1, pkt.size, outputfile);
+    av_packet_unref(&pkt);
+  }
+  return out_size;
+}
 
 int open_output_file(const char *file_name, int inW, int inH, int inFramerate) {
   outbuf_size = 1024*1024;
@@ -33,25 +47,23 @@ int open_output_file(const char *file_name, int inW, int inH, int inFramerate) {
 
   AVCodec *codec;
 
-//codec = avcodec_find_encoder(CODEC_ID_MPEG4);
-  codec = avcodec_find_encoder(CODEC_ID_MPEG2VIDEO);
-//codec = avcodec_find_encoder(CODEC_ID_XVID);
-//codec = avcodec_find_encoder(CODEC_ID_DVVIDEO);
-//codec = avcodec_find_encoder(CODEC_ID_XVID);
-//codec = avcodec_find_encoder(CODEC_ID_MPEG1VIDEO);
+//codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+  codec = avcodec_find_encoder(AV_CODEC_ID_MPEG2VIDEO);
+//codec = avcodec_find_encoder(AV_CODEC_ID_XVID);
+//codec = avcodec_find_encoder(AV_CODEC_ID_DVVIDEO);
+//codec = avcodec_find_encoder(AV_CODEC_ID_XVID);
+//codec = avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
 
-  outCodecCtx= avcodec_alloc_context();
+  outCodecCtx= avcodec_alloc_context3(codec);
+  if(!outCodecCtx) {
+    fprintf(stderr, "could not allocate encode context.\n");
+    return -1;
+  }
 
   outCodecCtx->bit_rate = bitrate;
   outCodecCtx->rc_buffer_size = outbuf_size;
-#if 0
-  outCodecCtx->bit_rate_tolerance = bitrate/2;
-  outCodecCtx->rc_min_rate = bitrate/4;
-  outCodecCtx->rc_max_rate = bitrate*4;
-#else
   outCodecCtx->rc_min_rate = bitrate;
   outCodecCtx->rc_max_rate = bitrate;
-#endif
   outCodecCtx->sample_aspect_ratio = (AVRational){1,1};
   outCodecCtx->width = movie_width;
   outCodecCtx->height = movie_height;
@@ -59,10 +71,10 @@ int open_output_file(const char *file_name, int inW, int inH, int inFramerate) {
   outCodecCtx->gop_size = 30;
 //outCodecCtx->max_b_frames=1;
   outCodecCtx->pix_fmt = render_fmt;
-  outCodecCtx->flags |= CODEC_FLAG_QSCALE;
-//outCodecCtx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+  outCodecCtx->flags |= AV_CODEC_FLAG_QSCALE;
+//outCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
-  if (avcodec_open(outCodecCtx, codec) < 0) {
+  if (avcodec_open2(outCodecCtx, codec, NULL) < 0) {
     fprintf(stderr, "could not initiate encoder codec.\n");
     return -1;
   }
@@ -79,14 +91,25 @@ int open_output_file(const char *file_name, int inW, int inH, int inFramerate) {
 
 void encode_frame (AVFrame *picture) {
   static int max_size=0;
-  int out_size;
+  AVPacket pkt;
   if (outputfile == NULL) return;
-  out_size = avcodec_encode_video(outCodecCtx, outbuf, outbuf_size, picture);
-  fwrite(outbuf, 1, out_size, outputfile);
-  if (out_size>max_size) {
-    max_size=out_size;
-    if (100.0*out_size/outbuf_size > 50)
-      fprintf(stderr, "\nmax buf : %i/%i (%.1f%%)\n",out_size,outbuf_size,100.0*out_size/outbuf_size);
+  av_init_packet(&pkt);
+  pkt.data = outbuf;
+  pkt.size = outbuf_size;
+
+  if (avcodec_send_frame(outCodecCtx, picture) < 0) {
+    fprintf(stderr, "encoding frame failed\n");
+    return;
+  }
+  if (avcodec_receive_packet(outCodecCtx, &pkt) == 0) {
+    int out_size = pkt.size;
+    fwrite(pkt.data, 1, out_size, outputfile);
+    if (out_size>max_size) {
+      max_size=out_size;
+      if (100.0*out_size/outbuf_size > 50)
+        fprintf(stderr, "\nmax buf : %i/%i (%.1f%%)\n",out_size,outbuf_size,100.0*out_size/outbuf_size);
+    }
+    av_packet_unref(&pkt);
   }
 }
 
@@ -98,11 +121,18 @@ void encode_buffer(uint8_t *buffer) {
 
   if (!picture) {
 
-    picture= avcodec_alloc_frame();
+    picture= av_frame_alloc();
+    if(!picture) {
+      fprintf(stderr, "could not allocate picture\n");
+      return;
+    }
 
     int size = movie_width * movie_height;
     uint8_t* picture_buf = malloc((size * 3) / 2); /* size for YUV 420 */
 
+    picture->format = AV_PIX_FMT_YUV420P;
+    picture->width = movie_width;
+    picture->height = movie_height;
     picture->data[0] = picture_buf;
     picture->data[1] = picture->data[0] + size;
     picture->data[2] = picture->data[1] + size / 4;
@@ -123,26 +153,21 @@ void encode_buffer(uint8_t *buffer) {
 }
 
 void close_output_file(void) {
-  if (outputfile == NULL) return;
-  int out_size;
-  do {
-    out_size = avcodec_encode_video(outCodecCtx, outbuf, outbuf_size, NULL);
-    fwrite(outbuf, 1, out_size, outputfile);
-  } while(out_size);
+  if (outputfile == NULL) {
+    return;
+  }
 
-#if 0 // MPEG container only
-  outbuf[0] = 0x00;
-  outbuf[1] = 0x00;
-  outbuf[2] = 0x01;
-  outbuf[3] = 0xb7;
-#endif
+  flush_encoder();
 
-  fwrite(outbuf, 1, 4, outputfile);
   free(outbuf);
   fclose(outputfile);
+  outputfile = NULL;
   if (picture) { 
-    free(picture->data[0]);
-    free(picture); // av_free_frame();
+    AVFrame *p = picture;
+    free(p->data[0]);
+    picture = NULL;
+    av_frame_free(&p);
   }
-  picture=NULL;
+  if (outCodecCtx)
+    avcodec_free_context(&outCodecCtx);
 }
